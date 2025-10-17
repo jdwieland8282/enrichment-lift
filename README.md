@@ -4,6 +4,8 @@
 
 **GitHub repo:** `jdwieland8282/enrichment-lift`
 
+**run demo:** `run_demo.sh`
+
 ### Move your existing local demo into this repo
 
 **If your local project is already a git repo with history:**
