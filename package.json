@@ -4,7 +4,7 @@
   "private": true,
   "description": "Simple Prebid demo with random synthetic bidder + generic analytics shim.",
   "scripts": {
-    "dev": "npx http-server -c-1 -p 8080 .",
+    "dev": "http-server -c-1 -p 8080 .",
     "api": "node server.mjs",
     "dev:both": "node server.mjs & npx http-server -c-1 -p 8080 .",
     "start": "node server.js"
