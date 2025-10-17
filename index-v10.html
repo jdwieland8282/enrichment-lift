@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Prebid + Enrichment Lift + Synthetic Demo</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+    .row { display: grid; grid-template-columns: 340px 1fr; gap: 24px; align-items: start; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 16px; }
+    #ad-slot { width: 300px; height: 250px; border: 1px dashed #aaa; display: grid; place-items: center; background: #f9f9f9; }
+    button { padding: 8px 12px; border-radius: 8px; border: 1px solid #888; background: #fff; cursor: pointer; }
+    pre { max-height: 300px; overflow: auto; background: #111; color: #0f0; padding: 12px; border-radius: 8px; }
+    .muted { color: #666; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Prebid + Enrichment Lift + Synthetic Demo</h1>
+  <p class="muted">
+    Built-in <b>generic analytics adapter</b> will send Prebid events (with Enrichment Lift <i>labels</i>) to your collector.
+    Synthetic helpers are kept for the demo (custom events still POST for observability).
+  </p>
+
+  <div class="row">
+    <div class="card">
+      <h3>Controls</h3>
+      <button id="rerun">Re-run Auction</button>
+      <div style="margin-top:12px" class="muted">
+        URL params: <code>?pbjs_debug=true&amp;ga=http://enrichment-lift:9090/collect</code>
+      </div>
+      <div style="margin-top:12px">
+        <div id="ad-slot">Ad will render here</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Log</h3>
+      <pre id="log"></pre>
+    </div>
+  </div>
+
+  <!-- Your custom Prebid build that INCLUDES genericAnalyticsAdapter + enrichmentLiftMeasurement -->
+  <script src="prebid.js" async></script>
+  <script src="vendors/enrichmentLabels.js"></script>
+  <script src="vendors/patchGenericLabels.js"></script>
+
+  <script>
+    // ---------- Helpers ----------
+    const params = new URLSearchParams(location.search);
+    const collectUrl = params.get('ga') || params.get('analytics') || 'http://enrichment-lift:9090/collect';
+    const synthWinRate = Math.min(1, Math.max(0, parseFloat(params.get('synthWinRate') || '1'))); // 0..1
+    const logEl = document.getElementById('log');
+
+    function logLine(obj) {
+      if (!logEl) return;
+      logEl.textContent += JSON.stringify(obj) + "\n";
+      logEl.scrollTop = logEl.scrollHeight;
+      console.info(obj);
+    }
+
+    // Custom event POSTer ONLY for synthetic/render helpers
+    function postCustom(event, payload) {
+      const line = { ts: new Date().toISOString(), event, payload };
+      logLine(line);
+      // Send ONLY these custom events to the collector
+      try {
+        const json = JSON.stringify(line);
+        const cross = new URL(collectUrl, location.href).origin !== location.origin;
+        if (!cross && navigator.sendBeacon) {
+          navigator.sendBeacon(collectUrl, json);
+        } else {
+          fetch(collectUrl, { method: 'POST', mode: 'cors', credentials: 'omit', body: json });
+        }
+      } catch (e) {
+        console.warn('custom post failed', e);
+      }
+    }
+
+    // ---------- Prebid setup ----------
+    window.pbjs = window.pbjs || {}; pbjs.que = pbjs.que || [];
+
+    pbjs.que.push(function () {
+      //Below is a surgical patch for your index.html. It emits a type: "lift_auction" record after you pick/render the winner, with fields your server already aggregates (baselineCpm, treatmentCpm, incrementalCpm, cohort, plus labels).
+      // ---- LIFT SUMMARY HELPERS ----
+        function round2(x){ return Math.round((Number(x) + Number.EPSILON) * 100) / 100; }
+        function getLabels(){ return (window.pbjs && window.pbjs._analyticsLabels) || {}; }
+        function inferCohort(labels){
+          try {
+            // labels looks like { DemoRun: [ { name, percentage, enabled }, ... ] }
+            return Object.values(labels).some(arr =>
+              Array.isArray(arr) && arr.some(m => m && m.enabled === true)
+            ) ? 'test' : 'control';
+          } catch { return 'control'; }
+        }
+        function postSummary(baselineCpm, treatmentCpm, winnerSource) {
+          const labels = getLabels();
+          const cohort = inferCohort(labels);
+          const payload = {
+            type: 'lift_auction',
+            cohort,
+            baselineCpm: round2(baselineCpm),
+            treatmentCpm: round2(treatmentCpm),
+            incrementalCpm: round2(Number(treatmentCpm) - Number(baselineCpm)),
+            winner: winnerSource,
+            labels
+          };
+          try {
+            const json = JSON.stringify(payload);
+            const cross = new URL(collectUrl, location.href).origin !== location.origin;
+            if (!cross && navigator.sendBeacon) {
+              navigator.sendBeacon(collectUrl, json);
+            } else {
+              fetch(collectUrl, { method: 'POST', mode: 'cors', credentials: 'omit', body: json });
+            }
+          } catch(e) {
+            console.warn('summary send failed', e);
+          }
+        }
+      // Set config: SharedID + Enrichment Lift
+      //const treatmentPct = parseFloat(params.get('treatment') || '1.0'); // default 100% treatment
+      const freshRun = `DemoRun-${performance.now().toFixed(0)}-${Math.random().toString(36).slice(2,6)}`;
+      pbjs.setConfig({
+        bidderTimeout: 1200,
+        userSync: {
+          syncDelay: 0,
+          userIds: [{
+            name: 'sharedId',
+            storage: { type: 'cookie', name: '_sharedid', expires: 365 }
+          }]
+        },
+        enrichmentLiftMeasurement: {
+          testRun: freshRun,
+          storeSplits: 'memory',
+          suppression: 'submodules', //'eids'
+          modules: [
+            { name: 'sharedId', percentage: 0.5}
+          ]
+        }
+      });
+
+      // Enable built-in Generic Analytics (module is included in your prebid.js build)
+      pbjs.enableAnalytics({
+        provider: 'generic',
+        options: {
+          url: collectUrl,
+          batchSize: 5,
+          batchDelay: 200,
+          events: {
+            auctionInit(args)   { return { eventType: 'auctionInit',   labels: __computeEnrichmentLabels(), args }; },
+            bidRequested(args)  { return { eventType: 'bidRequested',  labels: __computeEnrichmentLabels(), args }; },
+            bidResponse(args)   { return { eventType: 'bidResponse',   labels: __computeEnrichmentLabels(), args }; },
+            auctionEnd(args)    { return { eventType: 'auctionEnd',    labels: __computeEnrichmentLabels(), args }; },
+            bidWon(args)        { return { eventType: 'bidWon',        labels: __computeEnrichmentLabels(), args }; },
+            noBid(args)         { return { eventType: 'noBid',         labels: __computeEnrichmentLabels(), args }; },
+            bidTimeout(args)    { return { eventType: 'bidTimeout',    labels: __computeEnrichmentLabels(), args }; }
+          }
+        }
+      });
+
+      // Define one banner unit for demo
+      const adUnits = [{
+        code: 'hb-direct-slot',
+        mediaTypes: { banner: { sizes: [[300, 250]] } },
+        bids: [
+          // keep a real bidder for signal; replace with your adapter(s) as needed
+          { bidder: 'appnexus', params: { placementId: '13144370' } }
+        ]
+      }];
+
+      // Attach UI
+      document.getElementById('rerun').addEventListener('click', function () {
+        const url = new URL(location.href);
+        url.searchParams.set('rk', Date.now().toString(36)); // cache-buster = fresh lifecycle
+        location.href = url.toString();                      // full page reload w/ same params
+      });
+
+      function renderSynthetic({ cpm, creative }) {
+        const slot = document.getElementById('ad-slot');
+        const isImg = /\.(png|jpe?g|gif|webp|svg)$/i.test(creative);
+        if (isImg) {
+          slot.innerHTML = '';
+          const img = new Image();
+          img.width = 300; img.height = 250;
+          img.src = creative;
+          slot.appendChild(img);
+        } else {
+          slot.innerHTML = `<iframe src="${creative}" width="300" height="250" frameborder="0" scrolling="no"></iframe>`;
+        }
+        postCustom('render_success', { source: 'synthetic', cpm, creative, kind: isImg ? 'image' : 'iframe' });
+      }
+
+      function renderPrebid(winning) {
+        const iframe = document.createElement('iframe');
+        iframe.width = 300; iframe.height = 250; iframe.frameBorder = 0; iframe.scrolling = 'no';
+        document.getElementById('ad-slot').innerHTML = '';
+        document.getElementById('ad-slot').appendChild(iframe);
+        try {
+          pbjs.renderAd(iframe.contentDocument, winning.adId);
+          postCustom('render_success', { source: 'prebid', cpm: winning.cpm, adId: winning.adId });
+        } catch (e) {
+          postCustom('render_error', { source: 'prebid', error: String(e) });
+        }
+      }
+
+      // Synthetic creative rotation (put your files in /ads)
+      // Synthetic creative rotation (persists across reloads for this tab)
+      const creatives = [
+        'ads/peanutbutter.jpeg',
+        'ads/images.jpeg',
+        'ads/download.jpeg'
+      ];
+
+      const CREATIVE_IDX_KEY = 'elmCreativeIdx';
+
+      function nextCreative() {
+        const n = creatives.length;
+        // read, default to 0, coerce to integer, and clamp
+        let i = parseInt(sessionStorage.getItem(CREATIVE_IDX_KEY) || '0', 10);
+        if (!Number.isFinite(i) || i < 0) i = 0;
+
+        const pick = creatives[i % n];
+
+        // advance and persist for the *next* page load / click
+        sessionStorage.setItem(CREATIVE_IDX_KEY, (i + 1) % n);
+
+        return pick;
+      }
+
+
+      function runAuction() {
+        // Clear slot
+        document.getElementById('ad-slot').innerHTML = 'Loading…';
+        postCustom('prebid_init', {});
+
+        pbjs.addAdUnits(adUnits);
+
+        pbjs.requestBids({
+          adUnits,
+          bidsBackHandler: function () {
+            // Highest Prebid CPM (if any)
+            const top = pbjs.getHighestCpmBids('hb-direct-slot') || [];
+            const pb = top[0];
+            const pbCpm = pb ? Number(pb.cpm) : 0;
+
+            // Synthetic bid
+            const labels = getLabels();
+            const cohort = inferCohort(labels);
+            // base synthetic CPM ~ $1–$3
+            let synthCpm = Math.random() * 2 + 1;
+            // configurable lift for test cohort (default +$0.50)
+            const synthLift = parseFloat((new URLSearchParams(location.search)).get('synthLift') || '0.5');
+            if (cohort === 'test') synthCpm += synthLift;
+            synthCpm = round2(synthCpm);
+            const synthCreative = nextCreative();
+            postCustom('synthetic_bid', { cpm: synthCpm, creative: synthCreative });
+
+            // Pick winner: biased by synthWinRate for demo; if no PB, synthetic wins
+            let winner;
+            const coin = Math.random();
+            if (!pb || coin < synthWinRate) {
+               winner = { source: 'synthetic', cpm: synthCpm, creative: synthCreative };
+               renderSynthetic(winner);
+               // Summary: baseline is Prebid CPM, treatment is what we actually delivered (synthetic)
+               postSummary(pbCpm, synthCpm, 'synthetic');
+             } else {
+               winner = { source: 'prebid', cpm: pbCpm, adId: pb.adId };
+               renderPrebid(pb);
+               // Summary: both baseline and treatment are Prebid CPM (no change)
+               postSummary(pbCpm, pbCpm, 'prebid');
+            }
+          },
+          timeout: 800
+        });
+      }
+
+      // First run
+      runAuction();
+    });
+  </script>
+</body>
+</html>
