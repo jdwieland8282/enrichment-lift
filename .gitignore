@@ -1,0 +1,14 @@
+# Node modules
+node_modules/
+
+# Logs and temp files
+*.log
+*.txt
+
+# Local servers or scripts
+server*.mjs
+refresh_osx.sh
+
+# OS-specific files
+.DS_Store
+
