@@ -8,7 +8,7 @@
     "api": "node server.mjs",
     "dev:both": "node server.mjs & npx http-server -c-1 -p 8080 .",
     "start": "node server.js",
-    "deploy": "npm run build && npx gh-pages -d dist -b gh-pages -r https://github.com/jdwieland8282/enrichment-lift.git",
+    "deploy": "./deploy.sh",
     "build": "rm -rf dist && mkdir dist && cp -r index.html prebid.js assets vendors scripts dist/"
 
   },
