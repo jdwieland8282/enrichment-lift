@@ -1,14 +1,15 @@
 # Node modules
 node_modules/
 
-# Logs and temp files
-*.log
-*.txt
+# Build folder
+dist/
 
-# Local servers or scripts
-server*.mjs
-refresh_osx.sh
-
-# OS-specific files
+# OS files
 .DS_Store
+
+# Local Prebid/dev folders (if not needed)
+folder-Prebid.js
+
+# gh-pages cache
+node_modules/.cache/gh-pages/
 
