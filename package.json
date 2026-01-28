@@ -8,7 +8,9 @@
     "api": "node server.mjs",
     "dev:both": "node server.mjs & npx http-server -c-1 -p 8080 .",
     "start": "node server.js",
-    "deploy": "gh-pages -d ."
+    "deploy": "gh-pages -d dist",
+    "build": "rm -rf dist && mkdir dist && cp -r index.html prebid.js assets vendors scripts dist/"
+
   },
   "devDependencies": {
     "gh-pages": "^6.3.0",
